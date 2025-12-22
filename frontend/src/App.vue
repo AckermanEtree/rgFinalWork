@@ -1,11 +1,14 @@
 ﻿<template>
     <div v-if="!isLoggedIn" class="login-container">
         <div class="login-box">
-            <h2>🔐 欢迎来到校园圈</h2>
-            <p>请设置或输入你的密码</p>
-            <input type="text" v-model="loginForm.username" placeholder="用户名" />
-            <input type="password" v-model="loginForm.password" placeholder="密码 (随便输)" />
-            <button @click="handleLogin">登录 / 注册</button>
+            <h2>🔐 校园圈 (联机版)</h2>
+            <p>请输入后端数据库中的账号</p>
+            <input type="text" v-model="loginForm.username" placeholder="用户名 (如: admin)" />
+            <input type="password" v-model="loginForm.password" placeholder="密码 (如: 123456)" />
+            <button @click="handleLogin" :disabled="isLoading">
+                {{ isLoading ? '登录中...' : '登录' }}
+            </button>
+            <p v-if="errorMsg" class="error-text">{{ errorMsg }}</p>
         </div>
     </div>
 
@@ -13,13 +16,14 @@
         <div class="header">
             <div class="title">📌 校园生活圈</div>
             <div class="user-info">
-                <span>用户: {{ loginForm.username }}</span>
-                <span @click="isLoggedIn = false" class="logout-btn">退出</span>
+                <span>当前用户: {{ currentUser.nickname || currentUser.username }}</span>
+                <span @click="logout" class="logout-btn">退出</span>
             </div>
         </div>
 
         <div class="search-bar">
-            <input v-model="searchQuery" placeholder="🔍 搜索内容、标签或日期..." />
+            <input v-model="searchQuery" @keyup.enter="handleSearch" placeholder="🔍 搜内容/标签，回车搜索..." />
+            <button @click="handleSearch">搜索</button>
         </div>
 
         <div class="post-box">
@@ -28,13 +32,14 @@
 
             <div class="tools">
                 <label class="file-btn">
-                    📷/📹 图片或视频
-                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" style="display: none" />
+                    <span v-if="isUploading">⏳ 上传中...</span>
+                    <span v-else>📷/📹 上传文件</span>
+                    <input type="file" @change="handleFileUpload" accept="image/*,video/*" style="display: none" :disabled="isUploading" />
                 </label>
 
                 <input v-model="inputTag" placeholder="#标签" class="tag-input" />
 
-                <button @click="savePost" class="pub-btn" :class="{ 'edit-mode': isEditing }">
+                <button @click="savePost" class="pub-btn" :class="{ 'edit-mode': isEditing }" :disabled="isUploading">
                     {{ isEditing ? '保存修改' : '发布' }}
                 </button>
                 <button v-if="isEditing" @click="cancelEdit" class="cancel-btn">取消</button>
@@ -48,18 +53,19 @@
         </div>
 
         <div class="feed-list">
-            <div v-if="filteredPosts.length === 0" class="empty-tip">没有找到相关内容~</div>
+            <div v-if="isLoading" class="loading-tip">加载中...</div>
+            <div v-else-if="postList.length === 0" class="empty-tip">暂无内容，快来发布第一条吧！</div>
 
-            <div v-for="item in filteredPosts" :key="item.id" class="card">
+            <div v-for="item in postList" :key="item.id" class="card">
                 <div class="card-header">
                     <div class="user-meta">
                         <div class="avatar"></div>
                         <div>
                             <div class="name">{{ item.author }}</div>
-                            <div class="time">{{ item.time }}</div>
+                            <div class="time">{{ formatDate(item.createTime) }}</div>
                         </div>
                     </div>
-                    <div class="ops" v-if="item.author === loginForm.username">
+                    <div class="ops" v-if="canOperate(item)">
                         <button @click="editPost(item)">修改</button>
                         <button @click="deletePost(item.id)" style="color:red">删除</button>
                     </div>
@@ -73,7 +79,7 @@
                 </div>
 
                 <div class="tags-row">
-                    <span class="tag">{{ item.tag }}</span>
+                    <span class="tag">{{ item.tags }}</span>
                 </div>
 
                 <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;" />
@@ -83,20 +89,19 @@
                         <span>评分: </span>
                         <span v-for="star in 5" :key="star"
                               class="star"
-                              :class="{ active: star <= item.rating }"
+                              :class="{ active: star <= (item.tempRating || item.score) }"
                               @click="ratePost(item, star)">★</span>
-                        <span style="font-size:12px; color:#888; margin-left:5px;">({{ item.rating }}分)</span>
                     </div>
 
                     <div class="comments-list">
-                        <div v-for="(comment, idx) in item.comments" :key="idx" class="comment-item">
-                            <span class="c-user">{{ comment.user }}:</span> {{ comment.text }}
+                        <div v-for="comment in item.comments" :key="comment.id" class="comment-item">
+                            <span class="c-user">{{ comment.username || '匿名' }}:</span> {{ comment.content }}
                         </div>
                     </div>
 
                     <div class="comment-input">
-                        <input v-model="item.tempComment" placeholder="写下你的评论..." @keyup.enter="addComment(item)" />
-                        <button @click="addComment(item)">发送</button>
+                        <input v-model="item.newComment" placeholder="写评论..." @keyup.enter="submitComment(item)" />
+                        <button @click="submitComment(item)">发送</button>
                     </div>
                 </div>
 
@@ -106,167 +111,228 @@
 </template>
 
 <script setup>
-    import { ref, computed } from 'vue'
+import { ref, onMounted } from 'vue'
+import axios from 'axios'
 
-    // --- 1. 登录逻辑 ---
-    const isLoggedIn = ref(false)
-    const loginForm = ref({ username: '', password: '' })
-    const handleLogin = () => {
-        if (!loginForm.value.username || !loginForm.value.password) return alert("请输入用户名和密码")
-        isLoggedIn.value = true
-    }
+// ================= 配置区 =================
+// 后端地址，如果后端端口改了这里也要改
+const API_BASE = 'http://localhost:8080/api'
+// ==========================================
 
-    // --- 2. 核心数据 ---
-    const inputContent = ref('')
-    const inputTag = ref('')
-    const previewUrl = ref('')
-    const previewType = ref('image') // image 或 video
+// 状态变量
+const isLoggedIn = ref(false)
+const isLoading = ref(false)
+const isUploading = ref(false)
+const errorMsg = ref('')
+const currentUser = ref({}) // 存登录后的用户信息
+const loginForm = ref({ username: '', password: '' })
 
-    // 编辑状态控制
-    const isEditing = ref(false)
-    const editingId = ref(null)
+const postList = ref([])
+const searchQuery = ref('')
 
-    // 模拟数据库数据
-    const postList = ref([
-        {
-            id: 1,
-            author: '测试用户',
-            content: '这是我拍的风景视频，大家看看！',
-            tag: '#旅行',
-            time: '2025-10-01',
-            mediaUrl: '',
-            mediaType: 'image',
-            rating: 4,
-            comments: [{ user: '路人甲', text: '真不错！' }],
-            tempComment: ''
-        },
-        {
-            id: 2,
-            author: 'Admin',
-            content: '欢迎大家使用新系统。',
-            tag: '#公告',
-            time: '20235-9-20',
-            mediaUrl: '',
-            mediaType: 'image',
-            rating: 5,
-            comments: [],
-            tempComment: ''
-        }
-    ])
+// 编辑/发布相关
+const inputContent = ref('')
+const inputTag = ref('')
+const previewUrl = ref('')
+const previewType = ref('image')
+const isEditing = ref(false)
+const editingId = ref(null)
 
-    // --- 3. 检索功能 (Computed) ---
-    const searchQuery = ref('')
-    const filteredPosts = computed(() => {
-        if (!searchQuery.value) return postList.value
-        const q = searchQuery.value.toLowerCase()
-        return postList.value.filter(post =>
-            post.content.toLowerCase().includes(q) ||
-            post.tag.toLowerCase().includes(q) ||
-            post.time.includes(q)
-        )
+// --- 1. 登录功能 (Login) ---
+const handleLogin = async () => {
+  if (!loginForm.value.username || !loginForm.value.password) return
+  isLoading.value = true
+  errorMsg.value = ''
+
+  try {
+    // 真实请求：POST /api/login
+    // 注意：这里假设后端返回 { code: 200, data: { user... } }
+    // 如果后端直接返回 user 对象，请去掉 .data
+    const res = await axios.post(`${API_BASE}/login`, loginForm.value)
+
+    // 假设后端返回的数据结构里包含用户信息
+    currentUser.value = res.data
+    isLoggedIn.value = true
+
+    // 登录成功后，立马获取列表
+    fetchPosts()
+  } catch (err) {
+    console.error(err)
+    errorMsg.value = '登录失败，请检查账号密码或后端是否启动'
+  } finally {
+    isLoading.value = false
+  }
+}
+
+const logout = () => {
+  isLoggedIn.value = false
+  loginForm.value = { username: '', password: '' }
+  postList.value = []
+}
+
+// --- 2. 获取列表 (Read) ---
+const fetchPosts = async () => {
+  isLoading.value = true
+  try {
+    // 真实请求：GET /api/posts?keyword=xxx
+    const url = searchQuery.value
+      ? `${API_BASE}/posts?keyword=${searchQuery.value}`
+      : `${API_BASE}/posts`
+
+    const res = await axios.get(url)
+    postList.value = res.data
+  } catch (err) {
+    alert("获取列表失败")
+  } finally {
+    isLoading.value = false
+  }
+}
+
+const handleSearch = () => {
+  fetchPosts()
+}
+
+// --- 3. 文件上传 (Upload) ---
+const handleFileUpload = async (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+
+  // 判断类型用于预览
+  previewType.value = file.type.startsWith('video') ? 'video' : 'image'
+  isUploading.value = true
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  try {
+    // 真实请求：POST /api/upload
+    // 后端应返回文件的 http 访问地址
+    const res = await axios.post(`${API_BASE}/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
+    previewUrl.value = res.data // 把后端返回的 URL 存起来
+  } catch (err) {
+    alert("文件上传失败")
+    previewUrl.value = ''
+  } finally {
+    isUploading.value = false
+  }
+}
 
-    // --- 4. 业务逻辑 ---
+// --- 4. 发布与修改 (Create & Update) ---
+const savePost = async () => {
+  if (!inputContent.value) return alert("内容不能为空")
 
-    // 文件处理 (支持视频)
-    const handleFileSelect = (e) => {
-        const file = e.target.files[0]
-        if (file) {
-            previewUrl.value = URL.createObjectURL(file)
-            previewType.value = file.type.startsWith('video') ? 'video' : 'image'
-        }
+  const postData = {
+    content: inputContent.value,
+    tags: inputTag.value,
+    mediaUrl: previewUrl.value,
+    mediaType: previewType.value,
+    // 如果是修改，发ID；如果是新增，后端自动生成ID
+    // 注意：通常后端需要从 Session 获取当前用户，这里为了简单，显式传一下 author
+    author: currentUser.value.username
+  }
+
+  try {
+    if (isEditing.value) {
+      // 修改：PUT /api/posts/{id}
+      await axios.put(`${API_BASE}/posts/${editingId.value}`, postData)
+      alert("修改成功")
+    } else {
+      // 新增：POST /api/posts
+      await axios.post(`${API_BASE}/posts`, postData)
+      alert("发布成功")
     }
-    const clearPreview = () => {
-        previewUrl.value = ''
-        previewType.value = 'image'
-    }
+    // 成功后刷新列表并清空表单
+    clearForm()
+    fetchPosts()
+  } catch (err) {
+    alert("操作失败")
+  }
+}
 
-    // 发布或保存修改
-    const savePost = () => {
-        if (!inputContent.value) return alert("内容不能为空")
+// --- 5. 删除 (Delete) ---
+const deletePost = async (id) => {
+  if (!confirm("确定删除吗？")) return
+  try {
+    // 真实请求：DELETE /api/posts/{id}
+    await axios.delete(`${API_BASE}/posts/${id}`)
+    // 从本地列表中移除，或者重新 fetchPosts()
+    postList.value = postList.value.filter(p => p.id !== id)
+  } catch (err) {
+    alert("删除失败")
+  }
+}
 
-        if (isEditing.value) {
-            // === 修改模式 ===
-            const post = postList.value.find(p => p.id === editingId.value)
-            if (post) {
-                post.content = inputContent.value
-                post.tag = inputTag.value
-                // 如果重新传了图/视频，就更新，否则保持原样
-                if (previewUrl.value) {
-                    post.mediaUrl = previewUrl.value
-                    post.mediaType = previewType.value
-                }
-            }
-            alert("修改成功！")
-            cancelEdit()
-        } else {
-            // === 新增模式 ===
-            const newPost = {
-                id: Date.now(),
-                author: loginForm.value.username,
-                content: inputContent.value,
-                tag: inputTag.value || '#日常',
-                time: new Date().toLocaleDateString(), // 获取当前日期
-                mediaUrl: previewUrl.value,
-                mediaType: previewType.value,
-                rating: 0,
-                comments: [],
-                tempComment: ''
-            }
-            postList.value.unshift(newPost)
-        }
+// --- 6. 互动 (Comment & Rate) ---
+const submitComment = async (item) => {
+  if (!item.newComment) return
+  try {
+    // 真实请求：POST /api/posts/{id}/interact
+    await axios.post(`${API_BASE}/posts/${item.id}/comment`, {
+      content: item.newComment,
+      username: currentUser.value.username
+    })
+    // 简单起见，刷新整个列表看到新评论
+    fetchPosts()
+  } catch (err) {
+    alert("评论失败")
+  }
+}
 
-        // 重置表单
-        clearForm()
-    }
+const ratePost = async (item, star) => {
+  item.tempRating = star // 视觉上先亮起来
+  try {
+    await axios.post(`${API_BASE}/posts/${item.id}/score`, {
+      score: star
+    })
+    // 不需要刷新，假装成功即可，或者 fetchPosts
+  } catch (err) {
+    alert("评分失败")
+  }
+}
 
-    // 进入编辑模式
-    const editPost = (item) => {
-        isEditing.value = true
-        editingId.value = item.id
-        inputContent.value = item.content
-        inputTag.value = item.tag
-        window.scrollTo({ top: 0, behavior: 'smooth' })
-    }
+// --- 辅助函数 ---
+const editPost = (item) => {
+  isEditing.value = true
+  editingId.value = item.id
+  inputContent.value = item.content
+  inputTag.value = item.tags
+  previewUrl.value = item.mediaUrl
+  previewType.value = item.mediaType
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
-    // 取消编辑
-    const cancelEdit = () => {
-        isEditing.value = false
-        editingId.value = null
-        clearForm()
-    }
+const cancelEdit = () => {
+  isEditing.value = false
+  editingId.value = null
+  clearForm()
+}
 
-    const clearForm = () => {
-        inputContent.value = ''
-        inputTag.value = ''
-        clearPreview()
-    }
+const clearForm = () => {
+  inputContent.value = ''
+  inputTag.value = ''
+  previewUrl.value = ''
+  isUploading.value = false
+}
 
-    // 删除
-    const deletePost = (id) => {
-        if (confirm("确定删除？")) {
-            postList.value = postList.value.filter(p => p.id !== id)
-        }
-    }
+const clearPreview = () => {
+  previewUrl.value = ''
+}
 
-    // 评分
-    const ratePost = (item, star) => {
-        item.rating = star
-    }
+// 简单的日期格式化
+const formatDate = (str) => {
+  if (!str) return ''
+  return new Date(str).toLocaleString()
+}
 
-    // 评论
-    const addComment = (item) => {
-        if (!item.tempComment) return
-        item.comments.push({
-            user: loginForm.value.username, // 默认用当前登录用户发评论
-            text: item.tempComment
-        })
-        item.tempComment = ''
-    }
+// 判断是否有权限操作 (作者本人或管理员)
+const canOperate = (item) => {
+  return currentUser.value.role === 'ADMIN' || item.author === currentUser.value.username
+}
 </script>
 
 <style>
-    /* 样式部分 */
     body {
         background: #f0f2f5;
         margin: 0;
@@ -287,25 +353,33 @@
         border-radius: 10px;
         text-align: center;
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        width: 300px;
     }
 
         .login-box input {
             display: block;
-            width: 200px;
-            margin: 10px auto;
+            width: 100%;
+            margin: 10px 0;
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
+            box-sizing: border-box;
         }
 
         .login-box button {
-            padding: 10px 20px;
+            width: 100%;
+            padding: 10px;
             background: #409eff;
             color: white;
             border: none;
             border-radius: 5px;
             cursor: pointer;
         }
+
+    .error-text {
+        color: red;
+        font-size: 12px;
+    }
 
     .app-container {
         max-width: 600px;
@@ -342,15 +416,25 @@
     .search-bar {
         padding: 10px 20px;
         background: #fafafa;
+        display: flex;
+        gap: 10px;
     }
 
         .search-bar input {
-            width: 100%;
+            flex: 1;
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 20px;
             text-align: center;
-            box-sizing: border-box;
+        }
+
+        .search-bar button {
+            padding: 5px 15px;
+            border-radius: 20px;
+            border: none;
+            background: #409eff;
+            color: white;
+            cursor: pointer;
         }
 
     .post-box {
@@ -407,7 +491,7 @@
     .edit-mode {
         background: #e6a23c;
     }
-    /* 修改模式变黄色 */
+
     .cancel-btn {
         background: #909399;
         color: white;
@@ -565,4 +649,10 @@
             cursor: pointer;
             padding: 0 10px;
         }
+
+    .loading-tip, .empty-tip {
+        text-align: center;
+        padding: 20px;
+        color: #999;
+    }
 </style>
