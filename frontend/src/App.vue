@@ -1,10 +1,10 @@
 ﻿<template>
     <div v-if="!isLoggedIn" class="login-container">
         <div class="login-box">
-            <h2>🔐 校园圈 (联机版)</h2>
+            <h2>🔐 校园圈 (Flask联调版)</h2>
             <p>请输入后端数据库中的账号</p>
-            <input type="text" v-model="loginForm.username" placeholder="用户名 (如: admin)" />
-            <input type="password" v-model="loginForm.password" placeholder="密码 (如: 123456)" />
+            <input type="text" v-model="loginForm.username" placeholder="用户名" />
+            <input type="password" v-model="loginForm.password" placeholder="密码" />
             <button @click="handleLogin" :disabled="isLoading">
                 {{ isLoading ? '登录中...' : '登录' }}
             </button>
@@ -16,13 +16,13 @@
         <div class="header">
             <div class="title">📌 校园生活圈</div>
             <div class="user-info">
-                <span>当前用户: {{ currentUser.nickname || currentUser.username }}</span>
+                <span>当前用户: {{ currentUser.username }}</span>
                 <span @click="logout" class="logout-btn">退出</span>
             </div>
         </div>
 
         <div class="search-bar">
-            <input v-model="searchQuery" @keyup.enter="handleSearch" placeholder="🔍 搜内容/标签，回车搜索..." />
+            <input v-model="searchQuery" @keyup.enter="handleSearch" placeholder="🔍 搜索标签 (如: 美食)..." />
             <button @click="handleSearch">搜索</button>
         </div>
 
@@ -32,12 +32,12 @@
 
             <div class="tools">
                 <label class="file-btn">
-                    <span v-if="isUploading">⏳ 上传中...</span>
-                    <span v-else>📷/📹 上传文件</span>
-                    <input type="file" @change="handleFileUpload" accept="image/*,video/*" style="display: none" :disabled="isUploading" />
+                    <span v-if="isUploading">⏳ 处理中...</span>
+                    <span v-else>📷/📹 选图(仅预览)</span>
+                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" style="display: none" />
                 </label>
 
-                <input v-model="inputTag" placeholder="#标签" class="tag-input" />
+                <input v-model="inputTag" placeholder="#标签 (空格分隔)" class="tag-input" />
 
                 <button @click="savePost" class="pub-btn" :class="{ 'edit-mode': isEditing }" :disabled="isUploading">
                     {{ isEditing ? '保存修改' : '发布' }}
@@ -49,6 +49,7 @@
                 <video v-if="previewType === 'video'" :src="previewUrl" controls></video>
                 <img v-else :src="previewUrl" />
                 <span @click="clearPreview" class="close-btn">×</span>
+                <div style="font-size:12px; color:orange; margin-top:5px;">⚠️ 提示: 后端未提供上传接口，此图片仅本地可见</div>
             </div>
         </div>
 
@@ -61,7 +62,7 @@
                     <div class="user-meta">
                         <div class="avatar"></div>
                         <div>
-                            <div class="name">{{ item.author }}</div>
+                            <div class="name">{{ item.authorName || ('用户ID:' + item.authorId) }}</div>
                             <div class="time">{{ formatDate(item.createTime) }}</div>
                         </div>
                     </div>
@@ -78,8 +79,8 @@
                     <img v-else :src="item.mediaUrl" />
                 </div>
 
-                <div class="tags-row">
-                    <span class="tag">{{ item.tags }}</span>
+                <div class="tags-row" v-if="item.tags && item.tags.length">
+                    <span class="tag" v-for="(t, i) in item.tags" :key="i">#{{ t }}</span>
                 </div>
 
                 <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;" />
@@ -89,13 +90,13 @@
                         <span>评分: </span>
                         <span v-for="star in 5" :key="star"
                               class="star"
-                              :class="{ active: star <= (item.tempRating || item.score) }"
+                              :class="{ active: star <= (item.myRating || item.avgScore || 0) }"
                               @click="ratePost(item, star)">★</span>
                     </div>
 
                     <div class="comments-list">
-                        <div v-for="comment in item.comments" :key="comment.id" class="comment-item">
-                            <span class="c-user">{{ comment.username || '匿名' }}:</span> {{ comment.content }}
+                        <div v-for="(comment, idx) in item.comments" :key="idx" class="comment-item">
+                            <span class="c-user">{{ comment.username }}:</span> {{ comment.content }}
                         </div>
                     </div>
 
@@ -111,228 +112,255 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import axios from 'axios'
+    import { ref } from 'vue'
+    import axios from 'axios'
 
-// ================= 配置区 =================
-// 后端地址，如果后端端口改了这里也要改
-const API_BASE = 'http://localhost:8080/api'
-// ==========================================
+    // ================= 配置区 =================
+    // 🚨 Flask 默认端口 5000
+    const API_BASE = 'http://localhost:5000/api'
+    // ==========================================
 
-// 状态变量
-const isLoggedIn = ref(false)
-const isLoading = ref(false)
-const isUploading = ref(false)
-const errorMsg = ref('')
-const currentUser = ref({}) // 存登录后的用户信息
-const loginForm = ref({ username: '', password: '' })
+    // 全局状态
+    const isLoggedIn = ref(false)
+    const isLoading = ref(false)
+    const isUploading = ref(false) // 即使不真传，也保留状态变量
+    const errorMsg = ref('')
+    const currentUser = ref({})
+    const loginForm = ref({ username: '', password: '' })
 
-const postList = ref([])
-const searchQuery = ref('')
+    const postList = ref([])
+    const searchQuery = ref('') // 用于搜索标签
 
-// 编辑/发布相关
-const inputContent = ref('')
-const inputTag = ref('')
-const previewUrl = ref('')
-const previewType = ref('image')
-const isEditing = ref(false)
-const editingId = ref(null)
+    // 编辑/发布相关
+    const inputContent = ref('')
+    const inputTag = ref('')
+    const previewUrl = ref('')
+    const previewType = ref('image')
+    const isEditing = ref(false)
+    const editingId = ref(null)
 
-// --- 1. 登录功能 (Login) ---
-const handleLogin = async () => {
-  if (!loginForm.value.username || !loginForm.value.password) return
-  isLoading.value = true
-  errorMsg.value = ''
-
-  try {
-    // 真实请求：POST /api/login
-    // 注意：这里假设后端返回 { code: 200, data: { user... } }
-    // 如果后端直接返回 user 对象，请去掉 .data
-    const res = await axios.post(`${API_BASE}/login`, loginForm.value)
-
-    // 假设后端返回的数据结构里包含用户信息
-    currentUser.value = res.data
-    isLoggedIn.value = true
-
-    // 登录成功后，立马获取列表
-    fetchPosts()
-  } catch (err) {
-    console.error(err)
-    errorMsg.value = '登录失败，请检查账号密码或后端是否启动'
-  } finally {
-    isLoading.value = false
-  }
-}
-
-const logout = () => {
-  isLoggedIn.value = false
-  loginForm.value = { username: '', password: '' }
-  postList.value = []
-}
-
-// --- 2. 获取列表 (Read) ---
-const fetchPosts = async () => {
-  isLoading.value = true
-  try {
-    // 真实请求：GET /api/posts?keyword=xxx
-    const url = searchQuery.value
-      ? `${API_BASE}/posts?keyword=${searchQuery.value}`
-      : `${API_BASE}/posts`
-
-    const res = await axios.get(url)
-    postList.value = res.data
-  } catch (err) {
-    alert("获取列表失败")
-  } finally {
-    isLoading.value = false
-  }
-}
-
-const handleSearch = () => {
-  fetchPosts()
-}
-
-// --- 3. 文件上传 (Upload) ---
-const handleFileUpload = async (e) => {
-  const file = e.target.files[0]
-  if (!file) return
-
-  // 判断类型用于预览
-  previewType.value = file.type.startsWith('video') ? 'video' : 'image'
-  isUploading.value = true
-
-  const formData = new FormData()
-  formData.append('file', file)
-
-  try {
-    // 真实请求：POST /api/upload
-    // 后端应返回文件的 http 访问地址
-    const res = await axios.post(`${API_BASE}/upload`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
-    previewUrl.value = res.data // 把后端返回的 URL 存起来
-  } catch (err) {
-    alert("文件上传失败")
-    previewUrl.value = ''
-  } finally {
-    isUploading.value = false
-  }
-}
-
-// --- 4. 发布与修改 (Create & Update) ---
-const savePost = async () => {
-  if (!inputContent.value) return alert("内容不能为空")
-
-  const postData = {
-    content: inputContent.value,
-    tags: inputTag.value,
-    mediaUrl: previewUrl.value,
-    mediaType: previewType.value,
-    // 如果是修改，发ID；如果是新增，后端自动生成ID
-    // 注意：通常后端需要从 Session 获取当前用户，这里为了简单，显式传一下 author
-    author: currentUser.value.username
-  }
-
-  try {
-    if (isEditing.value) {
-      // 修改：PUT /api/posts/{id}
-      await axios.put(`${API_BASE}/posts/${editingId.value}`, postData)
-      alert("修改成功")
-    } else {
-      // 新增：POST /api/posts
-      await axios.post(`${API_BASE}/posts`, postData)
-      alert("发布成功")
+    // --- 0. 核心：设置 JWT Token ---
+    const setAuthToken = (token) => {
+        if (token) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+        } else {
+            delete axios.defaults.headers.common['Authorization']
+        }
     }
-    // 成功后刷新列表并清空表单
-    clearForm()
-    fetchPosts()
-  } catch (err) {
-    alert("操作失败")
-  }
-}
 
-// --- 5. 删除 (Delete) ---
-const deletePost = async (id) => {
-  if (!confirm("确定删除吗？")) return
-  try {
-    // 真实请求：DELETE /api/posts/{id}
-    await axios.delete(`${API_BASE}/posts/${id}`)
-    // 从本地列表中移除，或者重新 fetchPosts()
-    postList.value = postList.value.filter(p => p.id !== id)
-  } catch (err) {
-    alert("删除失败")
-  }
-}
+    // --- 1. 登录 (POST /auth/login) ---
+    const handleLogin = async () => {
+        if (!loginForm.value.username || !loginForm.value.password) return
+        isLoading.value = true
+        errorMsg.value = ''
 
-// --- 6. 互动 (Comment & Rate) ---
-const submitComment = async (item) => {
-  if (!item.newComment) return
-  try {
-    // 真实请求：POST /api/posts/{id}/interact
-    await axios.post(`${API_BASE}/posts/${item.id}/comment`, {
-      content: item.newComment,
-      username: currentUser.value.username
-    })
-    // 简单起见，刷新整个列表看到新评论
-    fetchPosts()
-  } catch (err) {
-    alert("评论失败")
-  }
-}
+        try {
+            const res = await axios.post(`${API_BASE}/auth/login`, loginForm.value)
 
-const ratePost = async (item, star) => {
-  item.tempRating = star // 视觉上先亮起来
-  try {
-    await axios.post(`${API_BASE}/posts/${item.id}/score`, {
-      score: star
-    })
-    // 不需要刷新，假装成功即可，或者 fetchPosts
-  } catch (err) {
-    alert("评分失败")
-  }
-}
+            //解包结构：{ message: "...", data: { access_token, user } }
+            const { access_token, user } = res.data.data
 
-// --- 辅助函数 ---
-const editPost = (item) => {
-  isEditing.value = true
-  editingId.value = item.id
-  inputContent.value = item.content
-  inputTag.value = item.tags
-  previewUrl.value = item.mediaUrl
-  previewType.value = item.mediaType
-  window.scrollTo({ top: 0, behavior: 'smooth' })
-}
+            setAuthToken(access_token)
+            currentUser.value = user
+            isLoggedIn.value = true
 
-const cancelEdit = () => {
-  isEditing.value = false
-  editingId.value = null
-  clearForm()
-}
+            // 登录成功后拉取数据
+            fetchPosts()
+        } catch (err) {
+            console.error(err)
+            errorMsg.value = err.response?.data?.message || '登录失败，请检查账号密码或后端是否启动'
+        } finally {
+            isLoading.value = false
+        }
+    }
 
-const clearForm = () => {
-  inputContent.value = ''
-  inputTag.value = ''
-  previewUrl.value = ''
-  isUploading.value = false
-}
+    const logout = () => {
+        isLoggedIn.value = false
+        setAuthToken(null)
+        loginForm.value = { username: '', password: '' }
+        postList.value = []
+        currentUser.value = {}
+    }
 
-const clearPreview = () => {
-  previewUrl.value = ''
-}
+    // --- 2. 获取列表 (GET /posts) ---
+    const fetchPosts = async () => {
+        isLoading.value = true
+        try {
+            const config = { params: { page: 1, per_page: 50 } }
 
-// 简单的日期格式化
-const formatDate = (str) => {
-  if (!str) return ''
-  return new Date(str).toLocaleString()
-}
+            // 如果有搜索词，按 tag 搜索 (根据文档说明)
+            if (searchQuery.value) {
+                config.params.tag = searchQuery.value
+            }
 
-// 判断是否有权限操作 (作者本人或管理员)
-const canOperate = (item) => {
-  return currentUser.value.role === 'ADMIN' || item.author === currentUser.value.username
-}
+            const res = await axios.get(`${API_BASE}/posts`, config)
+
+            //解包：res.data.data.items
+            const items = res.data.data.items || []
+
+            //数据清洗映射
+            postList.value = items.map(item => ({
+                id: item.id,
+                // 如果后端没返回 username，暂时显示 ID
+                authorName: item.username || item.author || 'User',
+                authorId: item.user_id,
+                content: item.content,
+                // 后端返回的是数组 ["tag1", "tag2"]
+                tags: Array.isArray(item.tags) ? item.tags : [],
+                createTime: item.created_at,
+                // 提取媒体
+                mediaUrl: (item.media && item.media.length > 0) ? item.media[0].url : '',
+                mediaType: (item.media && item.media.length > 0) ? item.media[0].type : 'image',
+                // 列表接口通常不含评论，初始化为空数组
+                comments: [],
+                newComment: '',
+                myRating: 0 // 暂无
+            }))
+        } catch (err) {
+            console.error(err)
+            alert("获取列表失败: " + (err.response?.data?.message || "网络错误"))
+        } finally {
+            isLoading.value = false
+        }
+    }
+
+    const handleSearch = () => {
+        fetchPosts()
+    }
+
+    // --- 3. 文件选择 (模拟) ---
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0]
+        if (!file) return
+        previewType.value = file.type.startsWith('video') ? 'video' : 'image'
+        // 生成本地 Blob URL 预览
+        previewUrl.value = URL.createObjectURL(file)
+    }
+
+    // --- 4. 发布/修改 (POST/PUT /posts) ---
+    const savePost = async () => {
+        if (!inputContent.value) return alert("内容不能为空")
+
+        // 构造文档要求的 JSON 格式
+        const payload = {
+            content: inputContent.value,
+            visibility: "public",
+            // 字符串转数组 "#a #b" -> ["a", "b"]
+            tags: inputTag.value ? inputTag.value.replace(/#/g, '').split(' ').filter(t => t) : [],
+            // 构造 media 数组
+            media: previewUrl.value ? [{
+                type: previewType.value,
+                url: previewUrl.value, // 发给后端的是本地地址
+                thumbnail_url: ""
+            }] : []
+        }
+
+        try {
+            if (isEditing.value) {
+                await axios.put(`${API_BASE}/posts/${editingId.value}`, payload)
+                alert("修改成功")
+            } else {
+                await axios.post(`${API_BASE}/posts`, payload)
+                alert("发布成功")
+            }
+            clearForm()
+            fetchPosts()
+        } catch (err) {
+            console.error(err)
+            alert("操作失败: " + (err.response?.data?.message || err.message))
+        }
+    }
+
+    // --- 5. 删除 (DELETE /posts/:id) ---
+    const deletePost = async (id) => {
+        if (!confirm("确定删除吗？")) return
+        try {
+            await axios.delete(`${API_BASE}/posts/${id}`)
+            postList.value = postList.value.filter(p => p.id !== id)
+        } catch (err) {
+            alert("删除失败: " + (err.response?.data?.message || "权限不足"))
+        }
+    }
+
+    // --- 6. 评论 (POST /posts/:id/comments) ---
+    const submitComment = async (item) => {
+        if (!item.newComment) return
+        try {
+            await axios.post(`${API_BASE}/posts/${item.id}/comments`, {
+                content: item.newComment
+            })
+
+            // 乐观更新：直接推入本地数组显示
+            if (!item.comments) item.comments = []
+            item.comments.push({
+                username: currentUser.value.username || '我',
+                content: item.newComment
+            })
+            item.newComment = ''
+        } catch (err) {
+            alert("评论失败")
+        }
+    }
+
+    // --- 7. 评分 (POST /posts/:id/ratings) ---
+    const ratePost = async (item, star) => {
+        try {
+            await axios.post(`${API_BASE}/posts/${item.id}/ratings`, {
+                score: star
+            })
+            item.myRating = star // 更新本地显示
+        } catch (err) {
+            alert("评分失败")
+        }
+    }
+
+    // --- 辅助逻辑 ---
+    const editPost = (item) => {
+        isEditing.value = true
+        editingId.value = item.id
+        inputContent.value = item.content
+        // 数组转字符串回显
+        inputTag.value = item.tags ? item.tags.join(' ') : ''
+        previewUrl.value = item.mediaUrl
+        previewType.value = item.mediaType
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    const cancelEdit = () => {
+        isEditing.value = false
+        editingId.value = null
+        clearForm()
+    }
+
+    const clearForm = () => {
+        inputContent.value = ''
+        inputTag.value = ''
+        previewUrl.value = ''
+    }
+
+    const clearPreview = () => {
+        previewUrl.value = ''
+    }
+
+    const formatDate = (str) => {
+        if (!str) return ''
+        return new Date(str).toLocaleString()
+    }
+
+    // 简单的权限判断
+    const canOperate = (item) => {
+        // 如果当前登录的是管理员，或者是作者本人
+        if (currentUser.value.role === 'admin') return true
+        // Flask 文档返回的 user 里有 id，对比 id 最准确
+        if (currentUser.value.id && item.authorId) {
+            return currentUser.value.id === item.authorId
+        }
+        return false
+    }
 </script>
 
 <style>
+    /* CSS 保持不变，可以直接复用之前的样式 */
     body {
         background: #f0f2f5;
         margin: 0;
@@ -472,7 +500,7 @@ const canOperate = (item) => {
     }
 
     .tag-input {
-        width: 80px;
+        width: 120px;
         padding: 5px;
         border: 1px solid #ddd;
         border-radius: 4px;
@@ -583,12 +611,17 @@ const canOperate = (item) => {
         margin-bottom: 10px;
     }
 
+    .tags-row {
+        margin-bottom: 10px;
+    }
+
     .tag {
         background: #eef5fe;
         color: #409eff;
         font-size: 12px;
         padding: 2px 6px;
         border-radius: 4px;
+        margin-right: 5px;
     }
 
     .interaction-area {
