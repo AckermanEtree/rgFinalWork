@@ -221,6 +221,9 @@
         inputContent.value = ''
         inputTag.value = ''
         previewUrl.value = ''
+        // 清除编辑状态
+        isEditing.value = false
+        editingId.value = null
     }
 
     // --- 2. 获取列表 (GET /posts) ---
@@ -743,3 +746,4 @@
 
 
 </style>
+
