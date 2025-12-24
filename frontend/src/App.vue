@@ -217,6 +217,10 @@
         loginForm.value = { username: '', password: '' }
         postList.value = []
         currentUser.value = {}
+        //登出时，清除发布框的内容
+        inputContent.value = ''
+        inputTag.value = ''
+        previewUrl.value = ''
     }
 
     // --- 2. 获取列表 (GET /posts) ---
@@ -736,5 +740,6 @@
         cursor: pointer;
         font-size: 13px;
     }
+
 
 </style>
