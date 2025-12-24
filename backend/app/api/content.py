@@ -1,11 +1,11 @@
 from datetime import datetime
 
-from flask import Blueprint, request
+from flask import Blueprint, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from flask_jwt_extended import get_jwt
 
 from ..extensions import db
 from ..models import Post, Tag, Media, Comment, Rating
+from ..services.upload_service import save_media
 from ..utils.response import ok, error
 
 bp = Blueprint("content", __name__)
@@ -29,6 +29,48 @@ def _parse_datetime(value):
         return None
 
 
+def _parse_tags(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [tag for tag in value if tag]
+    if isinstance(value, str):
+        cleaned = value.replace("#", " ").strip()
+        return [tag for tag in cleaned.split() if tag]
+    return []
+
+
+def _parse_media(payload):
+    media_list = payload.get("media")
+    if isinstance(media_list, list):
+        return media_list
+    media_url = payload.get("mediaUrl")
+    media_type = payload.get("mediaType")
+    if media_url and media_type:
+        return [{"type": media_type, "url": media_url}]
+    return []
+
+
+@bp.route("/upload", methods=["POST"])
+def upload_media():
+    file_storage = request.files.get("file")
+    if not file_storage:
+        return error("file is required", status=400)
+    if not file_storage.mimetype:
+        return error("unknown file type", status=400)
+    if not (
+        file_storage.mimetype.startswith("image/")
+        or file_storage.mimetype.startswith("video/")
+    ):
+        return error("unsupported file type", status=400)
+
+    upload_dir = current_app.config.get("UPLOAD_FOLDER", "uploads")
+    filename = save_media(file_storage, upload_dir)
+    file_url = f"{request.host_url.rstrip('/')}/uploads/{filename}"
+    media_type = "video" if file_storage.mimetype.startswith("video/") else "image"
+    return ok({"url": file_url, "filename": filename, "type": media_type})
+
+
 @bp.route("/posts", methods=["POST"])
 @jwt_required()
 def create_post():
@@ -36,8 +78,8 @@ def create_post():
     user_id = get_jwt_identity()
     content = payload.get("content")
     visibility = payload.get("visibility", "public")
-    tags = payload.get("tags") or []
-    media_list = payload.get("media") or []
+    tags = _parse_tags(payload.get("tags"))
+    media_list = _parse_media(payload)
 
     post = Post(user_id=user_id, content=content, visibility=visibility)
 
@@ -69,6 +111,7 @@ def list_posts():
     args = request.args
     tag = args.get("tag")
     user_id = args.get("user_id")
+    keyword = args.get("keyword")
     start_date = _parse_datetime(args.get("start_date"))
     end_date = _parse_datetime(args.get("end_date"))
     page, per_page = _get_pagination(args)
@@ -78,6 +121,8 @@ def list_posts():
         query = query.filter(Post.user_id == user_id)
     if tag:
         query = query.join(Post.tags).filter(Tag.name == tag)
+    if keyword:
+        query = query.filter(Post.content.ilike(f"%{keyword}%"))
     if start_date:
         query = query.filter(Post.created_at >= start_date)
     if end_date:
@@ -129,7 +174,7 @@ def update_post(post_id):
 
     if tags is not None:
         post.tags = []
-        for name in tags:
+        for name in _parse_tags(tags):
             if not name:
                 continue
             tag = Tag.query.filter_by(name=name).first()
@@ -137,9 +182,9 @@ def update_post(post_id):
                 tag = Tag(name=name)
             post.tags.append(tag)
 
-    if media_list is not None:
+    if media_list is not None or payload.get("mediaUrl") or payload.get("mediaType"):
         post.media_items = []
-        for item in media_list:
+        for item in _parse_media(payload):
             if not isinstance(item, dict):
                 continue
             media_type = item.get("type")
@@ -234,3 +279,15 @@ def create_rating(post_id):
 
     db.session.commit()
     return ok({"rating": rating.to_dict()}, message="saved", status=201)
+
+
+@bp.route("/posts/<int:post_id>/comment", methods=["POST"])
+@jwt_required()
+def create_comment_alias(post_id):
+    return create_comment(post_id)
+
+
+@bp.route("/posts/<int:post_id>/score", methods=["POST"])
+@jwt_required()
+def create_rating_alias(post_id):
+    return create_rating(post_id)

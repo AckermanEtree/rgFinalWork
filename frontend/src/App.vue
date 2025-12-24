@@ -24,6 +24,11 @@
         <div class="header">
             <div class="title">📌 校园生活圈</div>
             <div class="user-info">
+                <label class="avatar-upload">
+                    <img v-if="currentUser.avatar" :src="currentUser.avatar" class="avatar" />
+                    <div v-else class="avatar placeholder">上传</div>
+                    <input type="file" @change="handleAvatarSelect" accept="image/*" style="display:none" />
+                </label>
                 <span>当前用户: {{ currentUser.username }}</span>
                 <span @click="logout" class="logout-btn">退出</span>
             </div>
@@ -41,7 +46,7 @@
                 <label class="file-btn">
                     <span v-if="isUploading">⏳ 处理中...</span>
                     <span v-else>📷/📹 选图(仅预览)</span>
-                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" style="display: none" />
+                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" multiple style="display: none" />
                 </label>
 
                 <input v-model="inputTag" placeholder="#标签 (空格分隔)" class="tag-input" />
@@ -52,38 +57,13 @@
                 <button v-if="isEditing" @click="cancelEdit" class="cancel-btn">取消</button>
             </div>
 
-            <div v-if="previewUrl" class="preview-area">
-                <video v-if="previewType === 'video'" :src="previewUrl" controls></video>
-                <img v-else :src="previewUrl" />
-                <span @click="clearPreview" class="close-btn">×</span>
-                <div style="font-size:12px; color:orange; margin-top:5px;">⚠️ 提示: 后端未提供上传接口，此图片仅本地可见</div>
-            </div>
-        </div>
-
-        <div class="post-box">
-            <div class="box-title">{{ isEditing ? '✏️ 修改动态' : '📝 发布新动态' }}</div>
-            <textarea v-model="inputContent" placeholder="分享你的新鲜事..." rows="3"></textarea>
-
-            <div class="tools">
-                <label class="file-btn">
-                    <span v-if="isUploading">⏳ 处理中...</span>
-                    <span v-else>📷/📹 选图(仅预览)</span>
-                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" style="display: none" />
-                </label>
-
-                <input v-model="inputTag" placeholder="#标签 (空格分隔)" class="tag-input" />
-
-                <button @click="savePost" class="pub-btn" :class="{ 'edit-mode': isEditing }" :disabled="isUploading">
-                    {{ isEditing ? '保存修改' : '发布' }}
-                </button>
-                <button v-if="isEditing" @click="cancelEdit" class="cancel-btn">取消</button>
-            </div>
-
-            <div v-if="previewUrl" class="preview-area">
-                <video v-if="previewType === 'video'" :src="previewUrl" controls></video>
-                <img v-else :src="previewUrl" />
-                <span @click="clearPreview" class="close-btn">×</span>
-                <div style="font-size:12px; color:orange; margin-top:5px;">⚠️ 提示: 后端未提供上传接口，此图片仅本地可见</div>
+            <div v-if="previewList.length" class="preview-area">
+                <div v-for="(media, idx) in previewList" :key="idx" class="preview-item">
+                    <video v-if="media.type === 'video'" :src="media.url" controls></video>
+                    <img v-else :src="media.url" />
+                    <span @click="removePreview(idx)" class="close-btn">×</span>
+                </div>
+                <div style="font-size:12px; color:orange; margin-top:5px;">✅ 图片/视频已上传到服务器</div>
             </div>
         </div>
 
@@ -93,13 +73,14 @@
 
             <div v-for="item in postList" :key="item.id" class="card">
                 <div class="card-header">
-                    <div class="user-meta">
-                        <div class="avatar"></div>
-                        <div>
-                            <div class="name">{{ item.authorName || ('用户ID:' + item.authorId) }}</div>
-                            <div class="time">{{ formatDate(item.createTime) }}</div>
-                        </div>
+                <div class="user-meta">
+                    <img v-if="item.avatar" :src="item.avatar" class="avatar" />
+                    <div v-else class="avatar placeholder"></div>
+                    <div>
+                        <div class="name">{{ item.authorName || ('用户ID:' + item.authorId) }}</div>
+                        <div class="time">{{ formatDate(item.createTime) }}</div>
                     </div>
+                </div>
                     <div class="ops" v-if="canOperate(item)">
                         <button @click="editPost(item)">修改</button>
                         <button @click="deletePost(item.id)" style="color:red">删除</button>
@@ -108,9 +89,11 @@
 
                 <div class="card-content">{{ item.content }}</div>
 
-                <div v-if="item.mediaUrl" class="media-display">
-                    <video v-if="item.mediaType === 'video'" :src="item.mediaUrl" controls></video>
-                    <img v-else :src="item.mediaUrl" />
+                <div v-if="item.media && item.media.length" class="media-display">
+                    <div v-for="(media, idx) in item.media" :key="idx" class="media-item">
+                        <video v-if="media.type === 'video'" :src="media.url" controls></video>
+                        <img v-else :src="media.url" />
+                    </div>
                 </div>
 
                 <div class="tags-row" v-if="item.tags && item.tags.length">
@@ -146,7 +129,7 @@
 </template>
 
 <script setup>
-    import { ref } from 'vue'
+    import { ref, onMounted } from 'vue'
     import axios from 'axios'
 
     // ================= 配置区 =================
@@ -168,8 +151,7 @@
     // 编辑/发布相关
     const inputContent = ref('')
     const inputTag = ref('')
-    const previewUrl = ref('')
-    const previewType = ref('image')
+    const previewList = ref([])
     const isEditing = ref(false)
     const editingId = ref(null)
 
@@ -180,6 +162,16 @@
         } else {
             delete axios.defaults.headers.common['Authorization']
         }
+    }
+
+    const saveSession = (token, user) => {
+        localStorage.setItem('token', token)
+        localStorage.setItem('user', JSON.stringify(user))
+    }
+
+    const clearSession = () => {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
     }
 
     // --- 1. 登录 (POST /auth/login) ---
@@ -197,6 +189,7 @@
             setAuthToken(access_token)
             currentUser.value = user
             isLoggedIn.value = true
+            saveSession(access_token, user)
 
             // 登录成功后拉取数据
             fetchPosts()
@@ -240,17 +233,34 @@
     const logout = () => {
         isLoggedIn.value = false
         setAuthToken(null)
+        clearSession()
         loginForm.value = { username: '', password: '' }
         postList.value = []
         currentUser.value = {}
         //登出时，清除发布框的内容
         inputContent.value = ''
         inputTag.value = ''
-        previewUrl.value = ''
+        previewList.value = []
         // 清除编辑状态
         isEditing.value = false
         editingId.value = null
     }
+
+    onMounted(() => {
+        const token = localStorage.getItem('token')
+        const userRaw = localStorage.getItem('user')
+        if (token && userRaw) {
+            try {
+                const user = JSON.parse(userRaw)
+                setAuthToken(token)
+                currentUser.value = user
+                isLoggedIn.value = true
+                fetchPosts()
+            } catch (err) {
+                clearSession()
+            }
+        }
+    })
 
     // --- 2. 获取列表 (GET /posts) ---
     const fetchPosts = async () => {
@@ -274,13 +284,13 @@
                 // 如果后端没返回 username，暂时显示 ID
                 authorName: item.username || item.author || 'User',
                 authorId: item.user_id,
+                avatar: item.avatar,
                 content: item.content,
                 // 后端返回的是数组 ["tag1", "tag2"]
                 tags: Array.isArray(item.tags) ? item.tags : [],
                 createTime: item.created_at,
                 // 提取媒体
-                mediaUrl: (item.media && item.media.length > 0) ? item.media[0].url : '',
-                mediaType: (item.media && item.media.length > 0) ? item.media[0].type : 'image',
+                media: Array.isArray(item.media) ? item.media : [],
                 // 列表接口通常不含评论，初始化为空数组
                 comments: [],
                 newComment: '',
@@ -298,13 +308,54 @@
         fetchPosts()
     }
 
-    // --- 3. 文件选择 (模拟) ---
-    const handleFileSelect = (e) => {
+    // --- 3. 文件选择并上传 (POST /upload) ---
+    const handleFileSelect = async (e) => {
+        const files = Array.from(e.target.files || [])
+        if (!files.length) return
+        isUploading.value = true
+
+        for (const file of files) {
+            const formData = new FormData()
+            formData.append('file', file)
+
+            try {
+                const res = await axios.post(`${API_BASE}/upload`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                })
+                previewList.value.push({
+                    type: res.data.data.type,
+                    url: res.data.data.url
+                })
+            } catch (err) {
+                console.error(err)
+                alert("上传失败，请检查后端是否支持上传接口")
+            }
+        }
+
+        isUploading.value = false
+        e.target.value = ''
+    }
+
+    const handleAvatarSelect = async (e) => {
         const file = e.target.files[0]
         if (!file) return
-        previewType.value = file.type.startsWith('video') ? 'video' : 'image'
-        // 生成本地 Blob URL 预览
-        previewUrl.value = URL.createObjectURL(file)
+        const formData = new FormData()
+        formData.append('file', file)
+
+        try {
+            const res = await axios.post(`${API_BASE}/upload`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            })
+            const avatarUrl = res.data.data.url
+            const profile = await axios.put(`${API_BASE}/users/me`, { avatar: avatarUrl })
+            currentUser.value = profile.data.data.user
+            saveSession(localStorage.getItem('token'), currentUser.value)
+        } catch (err) {
+            console.error(err)
+            alert("头像上传失败")
+        } finally {
+            e.target.value = ''
+        }
     }
 
     // --- 4. 发布/修改 (POST/PUT /posts) ---
@@ -318,11 +369,11 @@
             // 字符串转数组 "#a #b" -> ["a", "b"]
             tags: inputTag.value ? inputTag.value.replace(/#/g, '').split(' ').filter(t => t) : [],
             // 构造 media 数组
-            media: previewUrl.value ? [{
-                type: previewType.value,
-                url: previewUrl.value, // 发给后端的是本地地址
+            media: previewList.value.map(item => ({
+                type: item.type,
+                url: item.url,
                 thumbnail_url: ""
-            }] : []
+            }))
         }
 
         try {
@@ -391,8 +442,10 @@
         inputContent.value = item.content
         // 数组转字符串回显
         inputTag.value = item.tags ? item.tags.join(' ') : ''
-        previewUrl.value = item.mediaUrl
-        previewType.value = item.mediaType
+        previewList.value = Array.isArray(item.media) ? item.media.map(media => ({
+            type: media.type,
+            url: media.url
+        })) : []
         window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
@@ -405,11 +458,11 @@
     const clearForm = () => {
         inputContent.value = ''
         inputTag.value = ''
-        previewUrl.value = ''
+        previewList.value = []
     }
 
-    const clearPreview = () => {
-        previewUrl.value = ''
+    const removePreview = (index) => {
+        previewList.value.splice(index, 1)
     }
 
     const formatDate = (str) => {
@@ -519,6 +572,39 @@
         font-size: 12px;
         margin-left: 10px;
         cursor: pointer;
+    }
+
+    .avatar-upload {
+        display: inline-flex;
+        align-items: center;
+        cursor: pointer;
+        margin-right: 10px;
+    }
+
+    .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 1px solid #ddd;
+    }
+
+    .avatar.placeholder {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #f0f2f5;
+        color: #666;
+        font-size: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #ddd;
+    }
+
+    .preview-item,
+    .media-item {
+        margin-bottom: 8px;
     }
 
     .search-bar {
