@@ -114,7 +114,7 @@ def update_post(post_id):
     post = Post.query.get(post_id)
     if not post:
         return error("post not found", status=404)
-    if post.user_id != user_id and role != "admin":
+    if post.user_id != int(user_id) and role != "admin":
         return error("forbidden", status=403)
 
     content = payload.get("content")
@@ -161,7 +161,7 @@ def delete_post(post_id):
     post = Post.query.get(post_id)
     if not post:
         return error("post not found", status=404)
-    if post.user_id != user_id and role != "admin":
+    if post.user_id != int(user_id) and role != "admin":
         return error("forbidden", status=403)
 
     db.session.delete(post)
