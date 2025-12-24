@@ -1,5 +1,24 @@
-node_modules/
-.DS_Store
-dist/
-*.local
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+instance/
+*.db
 .env
+venv/
+.venv/
+
+# Flask migrations
+migrations/
+
+# Node / Vue
+node_modules/
+dist/
+.vite/
+
+# IDE / System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
