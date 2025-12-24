@@ -296,6 +296,17 @@
                 newComment: '',
                 myRating: 0 // 暂无
             }))
+             for (const post of postList.value) {
+                try {
+                    const commentsRes = await axios.get(`${API_BASE}/posts/${post.id}/comments`)
+                    post.comments = (commentsRes.data.data.items || []).map(c => ({
+                        username: c.username || `用户${c.user_id}`,
+                        content: c.content
+                    }))
+                } catch (e) {
+                    console.error('获取评论失败', e)
+                }
+            }
         } catch (err) {
             console.error(err)
             alert("获取列表失败: " + (err.response?.data?.message || "网络错误"))
@@ -876,4 +887,5 @@
 
 
 </style>
+
 
