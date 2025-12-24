@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from flask import Blueprint, request, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 from ..extensions import db
 from ..models import Post, Tag, Media, Comment, Rating
