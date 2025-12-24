@@ -33,6 +33,32 @@
             <input v-model="searchQuery" @keyup.enter="handleSearch" placeholder="🔍 搜索标签 (如: 美食)..." />
             <button @click="handleSearch">搜索</button>
         </div>
+        <div class="post-box">
+            <div class="box-title">{{ isEditing ? '✏️ 修改动态' : '📝 发布新动态' }}</div>
+            <textarea v-model="inputContent" placeholder="分享你的新鲜事..." rows="3"></textarea>
+
+            <div class="tools">
+                <label class="file-btn">
+                    <span v-if="isUploading">⏳ 处理中...</span>
+                    <span v-else>📷/📹 选图(仅预览)</span>
+                    <input type="file" @change="handleFileSelect" accept="image/*,video/*" style="display: none" />
+                </label>
+
+                <input v-model="inputTag" placeholder="#标签 (空格分隔)" class="tag-input" />
+
+                <button @click="savePost" class="pub-btn" :class="{ 'edit-mode': isEditing }" :disabled="isUploading">
+                    {{ isEditing ? '保存修改' : '发布' }}
+                </button>
+                <button v-if="isEditing" @click="cancelEdit" class="cancel-btn">取消</button>
+            </div>
+
+            <div v-if="previewUrl" class="preview-area">
+                <video v-if="previewType === 'video'" :src="previewUrl" controls></video>
+                <img v-else :src="previewUrl" />
+                <span @click="clearPreview" class="close-btn">×</span>
+                <div style="font-size:12px; color:orange; margin-top:5px;">⚠️ 提示: 后端未提供上传接口，此图片仅本地可见</div>
+            </div>
+        </div>
 
         <div class="post-box">
             <div class="box-title">{{ isEditing ? '✏️ 修改动态' : '📝 发布新动态' }}</div>
@@ -95,7 +121,7 @@
 
                 <div class="interaction-area">
                     <div class="rating-box">
-                        <span>评分: </span>
+                         <span class="rating-label">评分: </span>
                         <span v-for="star in 5" :key="star"
                               class="star"
                               :class="{ active: star <= (item.myRating || item.avgScore || 0) }"
@@ -405,6 +431,14 @@
 
 <style>
     /* CSS 保持不变，可以直接复用之前的样式 */
+
+    .rating-label {
+    color: #333333;   /* 评分两个字的颜色 */
+    font-size: 14px;
+    font-weight: 500;
+    margin-right: 4px;
+}
+
     body {
         background: #f0f2f5;
         margin: 0;
@@ -420,6 +454,7 @@
     }
 
     .login-box {
+     color: #333333;
         background: white;
         padding: 40px;
         border-radius: 10px;
@@ -459,6 +494,7 @@
         background: white;
         min-height: 100vh;
         padding-bottom: 50px;
+        color: #333333;
     }
 
     .header {
@@ -647,6 +683,8 @@
         font-size: 15px;
         margin-bottom: 10px;
         line-height: 1.5;
+
+         color: #222222;
     }
 
     .media-display img, .media-display video {
