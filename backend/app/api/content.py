@@ -2,6 +2,7 @@ from datetime import datetime
 
 from flask import Blueprint, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import get_jwt
 
 from ..extensions import db
 from ..models import Post, Tag, Media, Comment, Rating
@@ -109,10 +110,11 @@ def get_post(post_id):
 def update_post(post_id):
     payload = request.get_json(silent=True) or {}
     user_id = get_jwt_identity()
+    role = get_jwt().get("role")
     post = Post.query.get(post_id)
     if not post:
         return error("post not found", status=404)
-    if post.user_id != user_id:
+    if post.user_id != user_id and role != "admin":
         return error("forbidden", status=403)
 
     content = payload.get("content")
@@ -155,10 +157,11 @@ def update_post(post_id):
 @jwt_required()
 def delete_post(post_id):
     user_id = get_jwt_identity()
+    role = get_jwt().get("role")
     post = Post.query.get(post_id)
     if not post:
         return error("post not found", status=404)
-    if post.user_id != user_id:
+    if post.user_id != user_id and role != "admin":
         return error("forbidden", status=403)
 
     db.session.delete(post)

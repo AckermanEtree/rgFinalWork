@@ -21,6 +21,7 @@ class Post(db.Model):
         return {
             "id": self.id,
             "user_id": self.user_id,
+            "username": self.author.username if self.author else None,
             "content": self.content,
             "visibility": self.visibility,
             "created_at": self.created_at.isoformat() if self.created_at else None,

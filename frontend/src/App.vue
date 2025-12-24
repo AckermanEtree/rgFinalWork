@@ -5,11 +5,19 @@
             <p>请输入后端数据库中的账号</p>
             <input type="text" v-model="loginForm.username" placeholder="用户名" />
             <input type="password" v-model="loginForm.password" placeholder="密码" />
-            <button @click="handleLogin" :disabled="isLoading">
+            <!-- <button @click="handleLogin" :disabled="isLoading">
                 {{ isLoading ? '登录中...' : '登录' }}
+            </button> -->
+            <button @click="isRegistering ? handleRegister() : handleLogin()" :disabled="isLoading">
+                {{ isLoading ? (isRegistering ? '注册中...' : '登录中...') : (isRegistering ? '注册' : '登录') }}
+            </button>
+
+            <button @click="toggleMode" class="switch-btn">
+                {{ isRegistering ? '返回登录' : '去注册' }}
             </button>
             <p v-if="errorMsg" class="error-text">{{ errorMsg }}</p>
         </div>
+        
     </div>
 
     <div v-else class="app-container">
@@ -116,8 +124,8 @@
     import axios from 'axios'
 
     // ================= 配置区 =================
-    // 🚨 Flask 默认端口 5000
-    const API_BASE = 'http://localhost:5000/api'
+    // 🚨 Flask 默认端口 5001
+    const API_BASE = 'http://localhost:5001/api'
     // ==========================================
 
     // 全局状态
@@ -173,6 +181,35 @@
             isLoading.value = false
         }
     }
+
+    // 注册模式标志
+    const isRegistering = ref(false)
+
+    // 切换登录/注册模式
+    const toggleMode = () => {
+        isRegistering.value = !isRegistering.value
+        errorMsg.value = ''
+    }
+
+    // --- 注册 (POST /auth/register) ---
+    const handleRegister = async () => {
+        if (!loginForm.value.username || !loginForm.value.password) return
+        isLoading.value = true
+        errorMsg.value = ''
+
+        try {
+            const res = await axios.post(`${API_BASE}/auth/register`, loginForm.value)
+            alert("注册成功，请登录")
+            isRegistering.value = false
+            loginForm.value.password = ''
+        } catch (err) {
+            console.error(err)
+            errorMsg.value = err.response?.data?.message || '注册失败，请检查输入或后端服务'
+        } finally {
+            isLoading.value = false
+        }
+    }
+
 
     const logout = () => {
         isLoggedIn.value = false
@@ -688,4 +725,16 @@
         padding: 20px;
         color: #999;
     }
+
+    .switch-btn {
+        width: 100%;
+        margin-top: 10px;
+        padding: 8px;
+        border: none;
+        background: none;
+        color: #409eff;
+        cursor: pointer;
+        font-size: 13px;
+    }
+
 </style>
