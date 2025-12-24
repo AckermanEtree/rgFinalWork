@@ -467,7 +467,13 @@
 
     const formatDate = (str) => {
         if (!str) return ''
-        return new Date(str).toLocaleString()
+
+        // 直接解析为 Date 对象
+        const date = new Date(str)
+        // 转换为东八区时间（加8小时）
+        const beijingTime = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+        
+        return beijingTime.toLocaleString()
     }
 
     // 简单的权限判断
