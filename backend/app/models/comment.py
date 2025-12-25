@@ -13,8 +13,8 @@ class Comment(db.Model):
     post = db.relationship("Post", back_populates="comments")
     author = db.relationship("User", back_populates="comments")
 
-   def to_dict(self):
-       return {
+    def to_dict(self):
+        return {
             "id": self.id,
             "post_id": self.post_id,
             "user_id": self.user_id,
@@ -22,4 +22,3 @@ class Comment(db.Model):
             "content": self.content,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
-
